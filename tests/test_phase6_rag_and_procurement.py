@@ -1,7 +1,7 @@
 import pytest
 from app.rag.product_matching import ProductMatcher
 from app.rag.retrieval import KnowledgeRetriever
-from app.database.models import KnowledgeChunk, Bid, Supplier
+from app.database.models import KnowledgeChunk, Bid, Supplier, GroupRound
 from tests.test_phase2_inventory_and_sales import register_spaza_shop
 
 
@@ -137,3 +137,39 @@ def test_group_purchasing_collaborative_workflow(client):
     comp = r_status.json()
     assert comp["best_bid"]["unit_price_zar"] == 110.00
     assert "Metro Cash & Carry" in comp["recommendation"]
+
+
+def test_closed_group_round_rejects_pledges(client):
+    token, biz_id = register_spaza_shop(client, "Closed Round Shop", "+27821000018")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r_round = client.post("/api/pools", json={
+        "item_name": "Maize Meal",
+        "target_quantity": 50,
+        "target_cents": 600000,
+        "duration_days": 7
+    }, headers=headers)
+    assert r_round.status_code == 201
+    round_id = r_round.json()["id"]
+
+    from tests.conftest import TestingSessionLocal
+    db = TestingSessionLocal()
+    try:
+        round_obj = db.query(GroupRound).filter(GroupRound.id == round_id).first()
+        round_obj.status = "closed"
+        db.commit()
+    finally:
+        db.close()
+
+    r_pledge = client.post(f"/api/pools/{round_id}/pledges", json={
+        "quantity": 10,
+        "amount_cents": 120000
+    }, headers=headers)
+    assert r_pledge.status_code == 400
+    assert r_pledge.json()["detail"] == "Group round is not currently open for pledges"
+
+    r_get = client.get(f"/api/pools/{round_id}", headers=headers)
+    assert r_get.status_code == 200
+    assert r_get.json()["current_quantity"] == 0
+    assert r_get.json()["current_cents"] == 0
+    assert r_get.json()["pledges"] == []
