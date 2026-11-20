@@ -53,13 +53,16 @@ def test_network_verification_and_wrong_chain_rejection():
         bp.verify_network()
 
 
-def test_blockchain_network_and_contract_endpoints(client):
+def test_blockchain_network_and_contract_endpoints(client, monkeypatch):
+    monkeypatch.setattr(provider, "is_connected", lambda: False)
+
     r_net = client.get("/api/blockchain/network")
     assert r_net.status_code == 200
     net_data = r_net.json()
     assert net_data["expected_chain_id"] == 43113
+    assert net_data["is_connected"] is False
     assert net_data["rpc_url"] == "[redacted]"
-    assert net_data["contract_address"] == "0xE019a407a590C4348ea24c92Dc5Ac6C642e22f91"
+    assert net_data["contract_address"] == provider.contract_address
 
     r_contract = client.get("/api/blockchain/contract")
     assert r_contract.status_code == 200
