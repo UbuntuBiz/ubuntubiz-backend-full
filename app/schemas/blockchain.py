@@ -4,7 +4,11 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class VerifyTransactionRequest(BaseModel):
-    transaction_hash: str = Field(..., min_length=64, max_length=66, description="Avalanche Fuji 0x transaction hash")
+    transaction_hash: str = Field(
+        ...,
+        pattern=r"^(?:0x)?[0-9a-fA-F]{64}$",
+        description="Avalanche Fuji 32-byte transaction hash"
+    )
 
 
 class BlockchainNetworkResponse(BaseModel):

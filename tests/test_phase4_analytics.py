@@ -2,6 +2,27 @@ from datetime import date, datetime, timedelta, timezone
 from tests.test_phase2_inventory_and_sales import register_spaza_shop
 
 
+def test_scheduled_jobs_are_registered():
+    from app.core.celery_config import celery_app
+    from app.jobs.tasks import (
+        compute_daily_metrics_task,
+        detect_alerts_task,
+        generate_morning_briefs_task,
+    )
+
+    task_names = {
+        compute_daily_metrics_task.name,
+        detect_alerts_task.name,
+        generate_morning_briefs_task.name,
+    }
+    scheduled_tasks = {
+        entry["task"]
+        for entry in celery_app.conf.beat_schedule.values()
+    }
+    assert scheduled_tasks == task_names
+    assert scheduled_tasks <= set(celery_app.tasks)
+
+
 def test_daily_metrics_and_profit_computation(client):
     token, biz_id = register_spaza_shop(client, "Gogo Dlamini Spaza", "+27821000008")
     headers = {"Authorization": f"Bearer {token}"}
@@ -122,3 +143,35 @@ def test_morning_business_brief(client):
     assert brief["business_name"] == "Mandla Quick Spaza"
     assert "narrative" in brief
     assert "Good morning Mandla Quick Spaza" in brief["narrative"]
+
+
+def test_profit_uses_cost_at_sale_time(client):
+    token, _ = register_spaza_shop(client, "Cost Snapshot Shop", "+27821000021")
+    headers = {"Authorization": f"Bearer {token}"}
+    product = client.post("/api/products", json={
+        "name": "Rice",
+        "unit": "bag",
+        "cost_price": 1000,
+        "sell_price": 1600,
+        "initial_stock": 5
+    }, headers=headers).json()
+    sale = client.post("/api/sales", json={
+        "items": [{"product_id": product["id"], "qty": 2}],
+        "payment_type": "cash",
+        "idempotency_key": "cost_snapshot_sale"
+    }, headers=headers)
+    assert sale.status_code == 201
+
+    update = client.patch(f"/api/products/{product['id']}", json={
+        "cost_price": 1400
+    }, headers=headers)
+    assert update.status_code == 200
+
+    target_date = str(datetime.now(timezone.utc).date())
+    metrics = client.get(
+        f"/api/analytics/daily?target_date={target_date}",
+        headers=headers
+    )
+    assert metrics.status_code == 200
+    gross_profit = next(metric["value"] for metric in metrics.json() if metric["metric"] == "gross_profit")
+    assert gross_profit == 1200.0

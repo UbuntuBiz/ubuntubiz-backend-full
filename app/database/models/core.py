@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Index
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Index, Integer
 from sqlalchemy.orm import relationship
 from app.database.connection import Base
 
@@ -36,6 +36,7 @@ class User(Base):
     role = Column(String(32), default="owner", nullable=False)  # "owner", "manager", "cashier"
     pin_hash = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=False)
+    token_version = Column(Integer, default=0, server_default="0", nullable=False)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     business = relationship("Business", back_populates="users")

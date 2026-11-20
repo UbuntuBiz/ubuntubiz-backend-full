@@ -34,7 +34,7 @@ class UserRegisterRequest(BaseModel):
     area: str = Field(..., min_length=2, max_length=255)
     phone: str = Field(..., min_length=10, max_length=15)
     password: str = Field(..., min_length=6, max_length=128)
-    pin: Optional[str] = Field(None, min_length=4, max_length=6, description="4-6 digit numeric PIN for fast spaza login")
+    pin: Optional[str] = Field(None, pattern=r"^\d{4,6}$", description="4-6 digit numeric PIN for fast spaza login")
     language: str = Field("en")
 
 
@@ -45,7 +45,7 @@ class UserLoginRequest(BaseModel):
 
 class PinLoginRequest(BaseModel):
     phone: str = Field(..., min_length=10, max_length=15)
-    pin: str = Field(..., min_length=4, max_length=6)
+    pin: str = Field(..., pattern=r"^\d{4,6}$")
 
 
 class RefreshTokenRequest(BaseModel):

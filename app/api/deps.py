@@ -51,13 +51,24 @@ def get_current_user_and_tenant(
             detail="Malformed token claims",
         )
     
+    set_session_tenant(db, business_id)
     user = db.query(User).filter(User.id == user_id, User.business_id == business_id).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User associated with token not found",
         )
-    
-    # Secure session with RLS
-    set_session_tenant(db, business_id)
+    if payload.get("token_version", 0) != user.token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token has been revoked",
+        )
+
+    business = db.query(Business).filter(Business.id == business_id).first()
+    if not business or business.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Business account is inactive or suspended",
+        )
+
     return user

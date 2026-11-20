@@ -20,6 +20,7 @@ from app.schemas.pools import (
 )
 from app.services.procurement_service import ProcurementService
 from app.api.deps import get_current_user_and_tenant
+from app.core.permissions import Role
 
 router = APIRouter(prefix="/pools", tags=["Group Purchasing & Bulk Buying"])
 
@@ -84,6 +85,12 @@ def create_group_round(
     Initiate an off-chain collaborative bulk buying round.
     Preserves distinction between application records and Avalanche Fuji on-chain pools.
     """
+    if current_user.role != Role.OWNER.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a business owner may open a group purchasing round"
+        )
+
     round_obj = ProcurementService.draft_group_request(
         db=db,
         business_id=current_user.business_id,
@@ -124,7 +131,7 @@ def list_suppliers(
     """
     List verified suppliers available for group purchasing.
     """
-    suppliers = db.query(Supplier).all()
+    suppliers = db.query(Supplier).filter(Supplier.is_verified.is_(True)).all()
     return suppliers
 
 
@@ -134,12 +141,18 @@ def register_supplier(
     current_user: User = Depends(get_current_user_and_tenant),
     db: Session = Depends(get_db)
 ):
+    if current_user.role != Role.OWNER.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a business owner may register a supplier"
+        )
+
     supplier = Supplier(
         name=req.name,
         contact_phone=req.contact_phone,
         area=req.area,
         catalog_summary=req.catalog_summary,
-        is_verified=req.is_verified
+        is_verified=False
     )
     db.add(supplier)
     db.commit()
@@ -169,6 +182,12 @@ def pledge_to_group_round(
     """
     Pledge stock quantity and contribution to an open bulk buying round.
     """
+    if current_user.role != Role.OWNER.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a business owner may commit a pledge"
+        )
+
     pledge = ProcurementService.add_pledge(
         db=db,
         business_id=current_user.business_id,

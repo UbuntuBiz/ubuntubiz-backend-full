@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database.connection import Base
 from app.database.models.core import generate_uuid, utc_now
@@ -11,12 +11,14 @@ class Sale(Base):
     business_id = Column(String(36), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     total = Column(Integer, nullable=False)  # in integer cents
     payment_type = Column(String(32), default="cash", nullable=False)  # cash, card, spaza_credit, crypto
+    idempotency_key = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
 
     items = relationship("SaleItem", back_populates="sale", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_sales_biz_created", "business_id", "created_at"),
+        UniqueConstraint("business_id", "idempotency_key", name="uq_sales_business_idempotency"),
     )
 
 
@@ -27,6 +29,7 @@ class SaleItem(Base):
     sale_id = Column(String(36), ForeignKey("sales.id", ondelete="CASCADE"), nullable=False, index=True)
     product_id = Column(String(36), ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
     qty = Column(Integer, nullable=False)
+    unit_cost = Column(Integer, nullable=True)  # historical cost in integer cents
     unit_price = Column(Integer, nullable=False)  # in integer cents
 
     sale = relationship("Sale", back_populates="items")

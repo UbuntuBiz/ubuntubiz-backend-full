@@ -8,8 +8,11 @@ tasks.  The configuration mirrors the settings in ``app.config``.
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
-from app.config import settings
+from app.config import get_settings
+
+settings = get_settings()
 
 # Create Celery instance
 celery_app = Celery(
@@ -25,6 +28,20 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="Africa/Johannesburg",
     enable_utc=False,
+    beat_schedule={
+        "compute-daily-metrics": {
+            "task": "app.jobs.tasks.compute_daily_metrics",
+            "schedule": crontab(hour=0, minute=15),
+        },
+        "detect-alerts": {
+            "task": "app.jobs.tasks.detect_alerts",
+            "schedule": crontab(minute="*/30"),
+        },
+        "generate-morning-briefs": {
+            "task": "app.jobs.tasks.generate_morning_briefs",
+            "schedule": crontab(hour=6, minute=0),
+        },
+    },
     task_routes={
         "app.jobs.*": {"queue": "default"},
     },

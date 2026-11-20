@@ -1,9 +1,8 @@
 from contextvars import ContextVar
 from contextlib import contextmanager
 from typing import Optional, Generator
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session
-from app.core.logging import logger
 
 # Context variables for request-bound tenant isolation
 _current_business_id: ContextVar[Optional[str]] = ContextVar("current_business_id", default=None)
@@ -49,12 +48,24 @@ def set_session_tenant(db_session: Session, business_id: str) -> None:
     If PostgreSQL is used, sets the RLS session variable `app.business_id`.
     In SQLite test environments, records context for application-level assertion.
     """
-    try:
-        bind = db_session.get_bind()
-        dialect_name = bind.dialect.name if bind else ""
-        if dialect_name == "postgresql":
-            # Sanitize UUID / alphanumeric string
-            cleaned_id = business_id.replace("'", "")
-            db_session.execute(text(f"SET LOCAL app.business_id = '{cleaned_id}'"))
-    except Exception as e:
-        logger.warning(f"Could not set database session tenant variable: {e}")
+    db_session.info["business_id"] = business_id
+    bind = db_session.get_bind()
+    if bind and bind.dialect.name == "postgresql":
+        db_session.execute(
+            text("SELECT set_config('app.business_id', :business_id, true)"),
+            {"business_id": business_id}
+        )
+
+
+@event.listens_for(Session, "after_begin")
+def apply_tenant_for_transaction(
+    session: Session,
+    transaction,
+    connection
+) -> None:
+    business_id = session.info.get("business_id")
+    if business_id and connection.dialect.name == "postgresql":
+        connection.execute(
+            text("SELECT set_config('app.business_id', :business_id, true)"),
+            {"business_id": business_id}
+        )

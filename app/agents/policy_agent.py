@@ -30,11 +30,10 @@ class PolicyAgent(BaseAgent):
         if not user:
             return {"allowed": False, "reason": "User not found"}
 
-        # Cashiers cannot execute procurement or manual stock reversals
-        if user.role == "cashier" and action in ["submit_group_request", "undo_event"]:
+        if action in {"confirm_sale", "submit_group_request", "undo_event"} and user.role != "owner":
             return {
                 "allowed": False,
-                "reason": f"Role 'cashier' is not authorized to perform '{action}'. Owner approval required."
+                "reason": "Only a business owner may approve this operation."
             }
 
         # High-value operations require owner PIN confirmation

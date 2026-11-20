@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, Text, DateTime, ForeignKey, Index, JSON
+from sqlalchemy import Column, String, Float, Text, DateTime, ForeignKey, Index, JSON, Integer, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database.connection import Base
 from app.database.models.core import generate_uuid, utc_now
@@ -65,8 +65,13 @@ class KnowledgeChunk(Base):
     text = Column(Text, nullable=False)
     source = Column(String(255), nullable=False)  # doc reference, product catalog, POPIA act
     source_date = Column(String(32), nullable=False)  # e.g., "2026-01-15"
+    chunk_index = Column(Integer, nullable=True)
     embedding = Column(JSON, nullable=True)  # vector embedding float list or pgvector
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("business_id", "source", "chunk_index", name="uq_knowledge_source_chunk"),
+    )
 
 
 class Message(Base):

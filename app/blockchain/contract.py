@@ -7,19 +7,36 @@ from app.core.logging import logger
 settings = get_settings()
 
 REQUIRED_FUNCTIONS = {
-    "recordSale": ["itemName", "amountZar"],
-    "createBulkPool": ["itemName", "targetWei"],
-    "joinBulkPool": ["poolId"],
-    "createOrder": ["supplierOrItem", "amountZar"],
-    "approveOrder": ["orderId"],
+    "recordSale": [("itemName", "string"), ("amountZar", "uint256")],
+    "createBulkPool": [("itemName", "string"), ("targetWei", "uint256")],
+    "joinBulkPool": [("poolId", "uint256")],
+    "createOrder": [("supplierOrItem", "string"), ("amountZar", "uint256")],
+    "approveOrder": [("orderId", "uint256")],
 }
 
 REQUIRED_EVENTS = {
-    "SaleRecorded": ["saleId", "shopOwner", "itemName", "amountZar"],
-    "PoolCreated": ["poolId", "itemName", "targetWei"],
-    "PoolJoined": ["poolId", "member", "contributionWei"],
-    "OrderCreated": ["orderId", "supplierOrItem", "amountZar"],
-    "OrderApproved": ["orderId"],
+    "SaleRecorded": [
+        ("saleId", "uint256", True),
+        ("shopOwner", "address", True),
+        ("itemName", "string", False),
+        ("amountZar", "uint256", False),
+    ],
+    "PoolCreated": [
+        ("poolId", "uint256", True),
+        ("itemName", "string", False),
+        ("targetWei", "uint256", False),
+    ],
+    "PoolJoined": [
+        ("poolId", "uint256", True),
+        ("member", "address", True),
+        ("contributionWei", "uint256", False),
+    ],
+    "OrderCreated": [
+        ("orderId", "uint256", True),
+        ("supplierOrItem", "string", False),
+        ("amountZar", "uint256", False),
+    ],
+    "OrderApproved": [("orderId", "uint256", True)],
 }
 
 
@@ -67,11 +84,37 @@ class ContractABIManager:
                 f"Authentic ABI validation failed! Missing required functions: {missing_functions}"
             )
 
+        for item in abi:
+            if item.get("type") == "function" and item.get("name") in REQUIRED_FUNCTIONS:
+                actual = [
+                    (argument.get("name"), argument.get("type"))
+                    for argument in item.get("inputs", [])
+                ]
+                if actual != REQUIRED_FUNCTIONS[item["name"]]:
+                    raise ValueError(
+                        f"ABI function '{item['name']}' has an unexpected input signature"
+                    )
+
         missing_events = set(REQUIRED_EVENTS.keys()) - event_names
         if missing_events:
             raise ValueError(
                 f"Authentic ABI validation failed! Missing required events: {missing_events}"
             )
+
+        for item in abi:
+            if item.get("type") == "event" and item.get("name") in REQUIRED_EVENTS:
+                actual = [
+                    (
+                        argument.get("name"),
+                        argument.get("type"),
+                        argument.get("indexed", False)
+                    )
+                    for argument in item.get("inputs", [])
+                ]
+                if actual != REQUIRED_EVENTS[item["name"]]:
+                    raise ValueError(
+                        f"ABI event '{item['name']}' has an unexpected input signature"
+                    )
 
         logger.info(
             f"UbuntuBiz ABI validated successfully ({len(function_names)} functions, {len(event_names)} events)."

@@ -1,11 +1,12 @@
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from app.config import get_settings
 from app.core.logging import logger
-from app.database.connection import engine, Base
+from app.database.connection import engine
 import app.database.models  # Ensures all models are registered
 from app.api.auth import router as auth_router
 from app.api.businesses import router as business_router
@@ -18,16 +19,14 @@ from app.api.analytics import router as analytics_router
 from app.api.approvals import router as approvals_router
 from app.api.ai import router as ai_router
 from app.api.pools import router as pools_router
+from app.api.webhooks import router as webhooks_router
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure tables exist
-    logger.info("Initializing UbuntuBiz database tables...")
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database initialized successfully.")
+    logger.info("UbuntuBiz backend started.")
     yield
     # Shutdown
     logger.info("Shutting down UbuntuBiz backend...")
@@ -46,7 +45,7 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restricted in production through environment settings
+    allow_origins=settings.allowed_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,7 +65,9 @@ async def add_process_time_and_logging(request: Request, call_next):
 # Global Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+    logger.error(
+        f"Unhandled {type(exc).__name__} on {request.method} {request.url.path}"
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An unexpected internal server error occurred."}
@@ -84,8 +85,22 @@ def health_check():
         "environment": settings.ENVIRONMENT,
         "currency": settings.DEFAULT_CURRENCY,
         "chain_id": settings.AVAX_FUJI_CHAIN_ID,
-        "contract": settings.UBUNTUBIZ_CONTRACT_ADDRESS,
     }
+
+
+@app.get("/ready", tags=["Health"])
+@app.get(f"{settings.API_V1_PREFIX}/ready", tags=["Health"])
+def readiness_check():
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.error(f"Database readiness check failed ({type(exc).__name__})")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database is not ready"
+        ) from exc
+    return {"status": "ready"}
 
 
 # Include Routers
@@ -100,3 +115,4 @@ app.include_router(analytics_router, prefix=settings.API_V1_PREFIX)
 app.include_router(approvals_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ai_router, prefix=settings.API_V1_PREFIX)
 app.include_router(pools_router, prefix=settings.API_V1_PREFIX)
+app.include_router(webhooks_router, prefix=settings.API_V1_PREFIX)

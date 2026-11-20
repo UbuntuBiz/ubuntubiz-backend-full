@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+from statistics import median
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -38,7 +39,9 @@ class AnalyticsService:
         items = db.query(SaleItem).filter(SaleItem.sale_id.in_(sale_ids)).all() if sale_ids else []
         total_cogs_cents = 0
         for item in items:
-            cost = item.product.cost_price if item.product and item.product.cost_price is not None else 0
+            cost = item.unit_cost
+            if cost is None:
+                cost = item.product.cost_price if item.product and item.product.cost_price is not None else 0
             total_cogs_cents += cost * item.qty
         gross_profit_cents = daily_sales_cents - total_cogs_cents
 
@@ -152,8 +155,7 @@ class AnalyticsService:
                 past_weekday_sales.append(m.value)
 
         if len(past_weekday_sales) >= 2:
-            past_weekday_sales.sort()
-            median_sales = past_weekday_sales[len(past_weekday_sales) // 2]
+            median_sales = median(past_weekday_sales)
             today_sales_metric = db.query(DailyMetric).filter(
                 DailyMetric.business_id == business_id,
                 DailyMetric.date == today,
@@ -256,7 +258,10 @@ class AnalyticsService:
         # Gross profit
         sale_ids = [s.id for s in yesterday_sales]
         items = db.query(SaleItem).filter(SaleItem.sale_id.in_(sale_ids)).all() if sale_ids else []
-        cogs_cents = sum((it.product.cost_price or 0) * it.qty for it in items)
+        cogs_cents = sum(
+            (it.unit_cost if it.unit_cost is not None else (it.product.cost_price or 0)) * it.qty
+            for it in items
+        )
         gross_profit_zar = round((total_sales_cents - cogs_cents) / 100.0, 2)
 
         # Active alerts

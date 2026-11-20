@@ -1,67 +1,91 @@
-"""RAG Knowledge Base Ingestion Script
+"""Ingest text files into the tenant-scoped knowledge store."""
 
-This module provides a simple CLI to ingest knowledge chunks into the
-`knowledge_chunks` table. It reads a directory of text files, generates
-embeddings using the Gemini API, and stores the resulting records.
+import argparse
+from datetime import datetime, timezone
+from pathlib import Path
 
-The script is intentionally lightweight – it does not perform any heavy
-batch processing and can be extended later.
-"""
+from sqlalchemy.orm import Session
 
-import os
-import pathlib
-from typing import List
+from app.database.connection import SessionLocal
+from app.database.models import KnowledgeChunk
+from app.core.tenant import set_session_tenant
 
-from fastapi import Depends
 
-from app.config import settings
-from app.database import get_session
-from app.database.models.knowledge import KnowledgeChunk
-from app.rag.retrieval import embed_text
-from sqlalchemy.ext.asyncio import AsyncSession
-
-async def ingest_directory(path: str, business_id: int, session: AsyncSession = Depends(get_session)) -> int:
-    """Ingest all ``.txt`` files from *path* for a given business.
-
-    Returns the number of chunks inserted.
-    """
-    base_path = pathlib.Path(path)
+def ingest_directory(path: str, business_id: str, session: Session) -> int:
+    base_path = Path(path)
     if not base_path.is_dir():
         raise ValueError(f"{path!r} is not a directory")
 
+    set_session_tenant(session, business_id)
     inserted = 0
-    for file_path in base_path.rglob("*.txt"):
-        text = file_path.read_text(encoding="utf-8")
-        # Split large documents into smaller chunks (max 1000 chars)
-        chunks = [text[i : i + 1000] for i in range(0, len(text), 1000)]
-        for chunk in chunks:
-            embedding = await embed_text(chunk)
-            kc = KnowledgeChunk(
-                business_id=business_id,
-                scope="file",
-                text=chunk,
-                source=str(file_path),
-                source_date=None,
-                embedding=embedding,
-            )
-            session.add(kc)
-            inserted += 1
-    await session.commit()
+    try:
+        for file_path in sorted(base_path.rglob("*.txt")):
+            text = file_path.read_text(encoding="utf-8")
+            source = file_path.relative_to(base_path).as_posix()
+            if not text.strip():
+                session.query(KnowledgeChunk).filter(
+                    KnowledgeChunk.business_id == business_id,
+                    KnowledgeChunk.scope == "business_private",
+                    KnowledgeChunk.source == source
+                ).delete(synchronize_session=False)
+                continue
+
+            source_date = datetime.fromtimestamp(
+                file_path.stat().st_mtime,
+                timezone.utc
+            ).date().isoformat()
+            chunks = [text[index:index + 1000] for index in range(0, len(text), 1000)]
+
+            for chunk_index, chunk in enumerate(chunks):
+                existing = session.query(KnowledgeChunk).filter(
+                    KnowledgeChunk.business_id == business_id,
+                    KnowledgeChunk.scope == "business_private",
+                    KnowledgeChunk.source == source,
+                    KnowledgeChunk.chunk_index == chunk_index
+                ).first()
+                if existing and existing.text == chunk:
+                    continue
+                if existing:
+                    existing.text = chunk
+                    existing.source_date = source_date
+                    existing.embedding = None
+                    continue
+
+                session.add(KnowledgeChunk(
+                    business_id=business_id,
+                    scope="business_private",
+                    text=chunk,
+                    source=source,
+                    source_date=source_date,
+                    chunk_index=chunk_index
+                ))
+                inserted += 1
+
+            session.query(KnowledgeChunk).filter(
+                KnowledgeChunk.business_id == business_id,
+                KnowledgeChunk.scope == "business_private",
+                KnowledgeChunk.source == source,
+                KnowledgeChunk.chunk_index >= len(chunks)
+            ).delete(synchronize_session=False)
+
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
     return inserted
 
-# When run as a script ``python -m app.rag.ingest <dir> <biz_id>``
-if __name__ == "__main__":
-    import argparse
-    import asyncio
 
-    parser = argparse.ArgumentParser(description="Ingest knowledge files into the DB")
-    parser.add_argument("directory", help="Path to the folder containing .txt files")
-    parser.add_argument("business_id", type=int, help="Business identifier")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Ingest text files into the knowledge store")
+    parser.add_argument("directory", help="Directory containing .txt files")
+    parser.add_argument("business_id", help="Business UUID that owns the ingested content")
     args = parser.parse_args()
 
-    async def main():
-        async with get_session() as session:
-            count = await ingest_directory(args.directory, args.business_id, session)
-            print(f"Inserted {count} knowledge chunks")
+    with SessionLocal() as session:
+        count = ingest_directory(args.directory, args.business_id, session)
+    print(f"Inserted {count} knowledge chunks")
 
-    asyncio.run(main())
+
+if __name__ == "__main__":
+    main()

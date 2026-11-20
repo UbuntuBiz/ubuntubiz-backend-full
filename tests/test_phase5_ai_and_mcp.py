@@ -2,6 +2,9 @@ import pytest
 from app.mcp.dispatcher import MCPDispatcher
 from app.agents.orchestrator import OrchestratorAgent
 from app.agents.base import BaseAgent
+from app.core.security import create_access_token
+from app.database.models import Approval, User, Message
+from tests.conftest import TestingSessionLocal
 from tests.test_phase2_inventory_and_sales import register_spaza_shop
 
 
@@ -104,3 +107,57 @@ def test_capture_agent_and_owner_approval_workflow(client):
     assert len(trace["tool_calls"]) >= 1
     # Check that tool was match_product
     assert trace["tool_calls"][0]["tool"] == "match_product"
+
+    db = TestingSessionLocal()
+    try:
+        web_messages = db.query(Message).filter(
+            Message.business_id == biz_id,
+            Message.channel == "web_chat"
+        ).all()
+        assert len(web_messages) == 2
+        assert {message.direction for message in web_messages} == {"inbound", "outbound"}
+    finally:
+        db.close()
+
+
+def test_cashier_cannot_decide_owner_approval(client):
+    _, business_id = register_spaza_shop(
+        client,
+        "Approval Role Shop",
+        "+27821000022"
+    )
+
+    db = TestingSessionLocal()
+    try:
+        cashier = User(
+            business_id=business_id,
+            phone="+27821000023",
+            role="cashier",
+            password_hash="not-used-by-this-test"
+        )
+        approval = Approval(
+            business_id=business_id,
+            action="confirm_sale",
+            summary="Pending approval",
+            status="pending"
+        )
+        db.add_all([cashier, approval])
+        db.commit()
+        db.refresh(cashier)
+        db.refresh(approval)
+        cashier_token = create_access_token(
+            subject=cashier.id,
+            business_id=business_id,
+            role="cashier",
+            token_version=cashier.token_version
+        )
+        approval_id = approval.id
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/api/approvals/{approval_id}/decide",
+        json={"decision": "approved"},
+        headers={"Authorization": f"Bearer {cashier_token}"}
+    )
+    assert response.status_code == 403

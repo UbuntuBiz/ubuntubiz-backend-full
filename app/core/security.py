@@ -29,7 +29,13 @@ def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
     return pwd_context.verify(plain_pin, hashed_pin)
 
 
-def create_access_token(subject: str, business_id: str, role: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    subject: str,
+    business_id: str,
+    role: str,
+    token_version: int = 0,
+    expires_delta: Optional[timedelta] = None
+) -> str:
     """Create a signed JWT access token containing user identity and business_id."""
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
@@ -40,6 +46,7 @@ def create_access_token(subject: str, business_id: str, role: str, expires_delta
         "sub": subject,
         "business_id": business_id,
         "role": role,
+        "token_version": token_version,
         "type": "access",
         "exp": expire,
         "iat": datetime.now(timezone.utc),
@@ -48,12 +55,13 @@ def create_access_token(subject: str, business_id: str, role: str, expires_delta
     return encoded_jwt
 
 
-def create_refresh_token(subject: str, business_id: str) -> str:
+def create_refresh_token(subject: str, business_id: str, token_version: int = 0) -> str:
     """Create a long-lived JWT refresh token."""
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode = {
         "sub": subject,
         "business_id": business_id,
+        "token_version": token_version,
         "type": "refresh",
         "exp": expire,
         "iat": datetime.now(timezone.utc),

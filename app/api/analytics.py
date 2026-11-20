@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database.connection import get_db
-from app.database.models import DailyMetric, Alert, User
+from app.database.models import DailyMetric, Alert, Sale, SaleItem, User
 from app.schemas.analytics import (
     DailyMetricResponse,
     AlertResponse,
@@ -78,15 +78,20 @@ def get_profit_summary(
     revenue_cents = summary["total_revenue_cents"]
 
     # Compute COGS from sale items
-    metrics = db.query(DailyMetric).filter(
-        DailyMetric.business_id == current_user.business_id,
-        DailyMetric.date >= start_d,
-        DailyMetric.date <= end_d,
-        DailyMetric.metric == "gross_profit"
+    sale_items = db.query(SaleItem).join(
+        Sale,
+        Sale.id == SaleItem.sale_id
+    ).filter(
+        Sale.business_id == current_user.business_id,
+        Sale.created_at >= start_dt,
+        Sale.created_at <= end_dt
     ).all()
-
-    gross_profit_cents = int(sum(m.value for m in metrics)) if metrics else revenue_cents
-    cogs_cents = max(0, revenue_cents - gross_profit_cents)
+    cogs_cents = sum(
+        (item.unit_cost if item.unit_cost is not None else (item.product.cost_price or 0))
+        * item.qty
+        for item in sale_items
+    )
+    gross_profit_cents = revenue_cents - cogs_cents
     margin = round((gross_profit_cents / revenue_cents * 100.0), 1) if revenue_cents > 0 else 0.0
 
     return ProfitSummaryResponse(

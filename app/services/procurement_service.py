@@ -93,9 +93,34 @@ class ProcurementService:
         amount_cents: int,
         actor: str = "system"
     ) -> Pledge:
-        round_obj = db.query(GroupRound).filter(GroupRound.id == round_id).first()
-        if not round_obj or round_obj.status != "open":
+        round_query = db.query(GroupRound).filter(GroupRound.id == round_id)
+        if db.bind and db.bind.dialect.name != "sqlite":
+            round_query = round_query.with_for_update()
+        round_obj = round_query.first()
+        closes_at = round_obj.closes_at if round_obj else None
+        if closes_at is not None and closes_at.tzinfo is None:
+            closes_at = closes_at.replace(tzinfo=timezone.utc)
+        if (
+            not round_obj
+            or round_obj.status != "open"
+            or (closes_at and closes_at <= datetime.now(timezone.utc))
+        ):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Group round is not currently open for pledges")
+        if quantity <= 0 or amount_cents <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pledge quantity and amount must be positive"
+            )
+        if round_obj.current_quantity + quantity > round_obj.target_quantity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pledge would exceed the round's target quantity"
+            )
+        if round_obj.current_cents + amount_cents > round_obj.target_cents:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pledge would exceed the round's target amount"
+            )
 
         pledge = Pledge(
             round_id=round_id,
@@ -127,7 +152,10 @@ class ProcurementService:
         if not round_obj:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group round not found")
 
-        bids = db.query(Bid).filter(Bid.round_id == round_id).all()
+        bids = db.query(Bid).join(Supplier).filter(
+            Bid.round_id == round_id,
+            Supplier.is_verified.is_(True)
+        ).all()
         return {
             "round_id": round_obj.id,
             "item_name": round_obj.item_name,

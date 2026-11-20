@@ -1,6 +1,7 @@
 import pytest
 from app.rag.product_matching import ProductMatcher
 from app.rag.retrieval import KnowledgeRetriever
+from app.rag.ingest import ingest_directory
 from app.database.models import KnowledgeChunk, Bid, Supplier, GroupRound
 from tests.test_phase2_inventory_and_sales import register_spaza_shop
 
@@ -114,11 +115,14 @@ def test_group_purchasing_collaborative_workflow(client):
         "is_verified": True
     }, headers=headers1)
     assert r_sup.status_code == 201
+    assert r_sup.json()["is_verified"] is False
     supplier_id = r_sup.json()["id"]
 
     from tests.conftest import TestingSessionLocal
     db = TestingSessionLocal()
     try:
+        supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+        supplier.is_verified = True
         bid = Bid(
             round_id=round_id,
             supplier_id=supplier_id,
@@ -173,3 +177,89 @@ def test_closed_group_round_rejects_pledges(client):
     assert r_get.json()["current_quantity"] == 0
     assert r_get.json()["current_cents"] == 0
     assert r_get.json()["pledges"] == []
+
+
+def test_rag_ingestion_is_tenant_scoped_and_idempotent(client, tmp_path):
+    token, biz_id = register_spaza_shop(client, "Knowledge Shop", "+27821000024")
+    source = tmp_path / "policy.txt"
+    source.write_text("Keep food storage clean and pest-free.", encoding="utf-8")
+
+    from tests.conftest import TestingSessionLocal
+    db = TestingSessionLocal()
+    try:
+        assert ingest_directory(str(tmp_path), biz_id, db) == 1
+        assert ingest_directory(str(tmp_path), biz_id, db) == 0
+        results = KnowledgeRetriever.search_knowledge(
+            db,
+            biz_id,
+            "food storage clean"
+        )
+        assert len(results) == 1
+        assert results[0]["source"] == "policy.txt"
+        assert results[0]["score"] > 0
+    finally:
+        db.close()
+
+
+def test_group_round_rejects_pledge_above_target(client):
+    token, _ = register_spaza_shop(client, "Target Shop", "+27821000025")
+    headers = {"Authorization": f"Bearer {token}"}
+    round_response = client.post("/api/pools", json={
+        "item_name": "Sugar",
+        "target_quantity": 2,
+        "target_cents": 40000,
+        "duration_days": 7
+    }, headers=headers)
+    assert round_response.status_code == 201
+
+    pledge = client.post(
+        f"/api/pools/{round_response.json()['id']}/pledges",
+        json={"quantity": 3, "amount_cents": 30000},
+        headers=headers
+    )
+    assert pledge.status_code == 400
+    assert "exceed the round's target quantity" in pledge.json()["detail"]
+
+
+def test_cashier_cannot_register_supplier(client):
+    _, business_id = register_spaza_shop(
+        client,
+        "Supplier Permission Shop",
+        "+27821000027"
+    )
+
+    from app.core.security import create_access_token
+    from app.database.models import User
+    from tests.conftest import TestingSessionLocal
+
+    db = TestingSessionLocal()
+    try:
+        cashier = User(
+            business_id=business_id,
+            phone="+27821000028",
+            role="cashier",
+            password_hash="not-used-by-this-test"
+        )
+        db.add(cashier)
+        db.commit()
+        db.refresh(cashier)
+        cashier_token = create_access_token(
+            subject=cashier.id,
+            business_id=business_id,
+            role="cashier",
+            token_version=cashier.token_version
+        )
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/pools/suppliers",
+        json={
+            "name": "Unverified Supplier",
+            "contact_phone": "+27119001001",
+            "area": "Johannesburg",
+            "is_verified": True
+        },
+        headers={"Authorization": f"Bearer {cashier_token}"}
+    )
+    assert response.status_code == 403

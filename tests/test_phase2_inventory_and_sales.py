@@ -71,6 +71,10 @@ def test_record_sale_reduces_stock_atomically(client):
     assert sale_data["total_zar"] == 30.00
     assert sale_data["payment_type"] == "cash"
 
+    r_sale_retry = client.post("/api/sales", json=sale_payload, headers=headers)
+    assert r_sale_retry.status_code == 201
+    assert r_sale_retry.json()["id"] == sale_data["id"]
+
     # Verify stock dropped to 8
     r_inv = client.get(f"/api/inventory?product_id={prod_id}", headers=headers)
     assert r_inv.status_code == 200
@@ -81,6 +85,7 @@ def test_record_sale_reduces_stock_atomically(client):
     assert r_events.status_code == 200
     events = r_events.json()
     # Most recent event should be sale with delta -2
+    assert len(events) == 2  # Initial stock and one sale, despite the retry
     assert events[0]["type"] == "sale"
     assert events[0]["qty_delta"] == -2
 

@@ -1,3 +1,8 @@
+import pytest
+from pydantic import ValidationError
+from app.config import Settings
+
+
 def test_health_endpoints(client):
     r1 = client.get("/health")
     assert r1.status_code == 200
@@ -8,6 +13,50 @@ def test_health_endpoints(client):
     r2 = client.get("/api/health")
     assert r2.status_code == 200
     assert r2.json()["status"] == "healthy"
+
+
+def test_production_settings_require_a_strong_secret():
+    with pytest.raises(ValidationError, match="SECRET_KEY must be configured"):
+        Settings(ENVIRONMENT="production", _env_file=None)
+
+    Settings(
+        ENVIRONMENT="production",
+        SECRET_KEY="s" * 48,
+        _env_file=None
+    )
+
+
+def test_cors_rejects_unconfigured_origins(client):
+    response = client.options(
+        "/api/health",
+        headers={
+            "Origin": "https://untrusted.example",
+            "Access-Control-Request-Method": "GET"
+        }
+    )
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_logout_revokes_existing_access_and_refresh_tokens(client):
+    response = client.post("/api/auth/register", json={
+        "business_name": "Logout Shop",
+        "area": "Soweto",
+        "phone": "+27821110001",
+        "password": "StrongPassword123!",
+        "pin": "1234",
+        "language": "en"
+    })
+    assert response.status_code == 201
+    token_data = response.json()
+    headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+
+    logout_response = client.post("/api/auth/logout", headers=headers)
+    assert logout_response.status_code == 200
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+    refresh_response = client.post("/api/auth/refresh", json={
+        "refresh_token": token_data["refresh_token"]
+    })
+    assert refresh_response.status_code == 401
 
 
 def test_spaza_registration_and_login(client):

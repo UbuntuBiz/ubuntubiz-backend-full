@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
-from app.database.models import Approval, AgentTask, User
+from app.database.models import Approval, AgentTask, GroupRound, User
 from app.services.sales_service import SalesService
 from app.services.procurement_service import ProcurementService
 from app.agents.policy_agent import PolicyAgent
@@ -28,6 +28,16 @@ class ApprovalService:
 
         if not approval:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval request not found")
+
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.business_id == business_id
+        ).first()
+        if not user or user.role != "owner":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a business owner may decide approvals"
+            )
 
         if approval.status != "pending":
             raise HTTPException(
@@ -57,7 +67,6 @@ class ApprovalService:
             ]
             total_cents = task.result_json.get("total_cents", 0)
 
-            # Check PolicyAgent
             policy_check = PolicyAgent.check_operation_policy(
                 db=db,
                 business_id=business_id,
@@ -91,14 +100,40 @@ class ApprovalService:
 
         elif action == "submit_group_request" and task and task.result_json:
             round_id = task.result_json.get("round_id")
-            if round_id:
-                round_obj = ProcurementService.submit_group_request(
-                    db=db,
-                    business_id=business_id,
-                    round_id=round_id,
-                    actor=f"approved_by:{user_id}"
+            round_obj = db.query(GroupRound).filter(
+                GroupRound.id == round_id,
+                GroupRound.initiator_business_id == business_id
+            ).first()
+            if not round_obj:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group round not found")
+
+            policy_check = PolicyAgent.check_operation_policy(
+                db=db,
+                business_id=business_id,
+                user_id=user_id,
+                action=action,
+                amount_cents=round_obj.target_cents,
+                provided_pin=pin
+            )
+            if not policy_check["allowed"]:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=policy_check["reason"]
                 )
-                execution_result = {"round_id": round_obj.id, "round_status": round_obj.status}
+
+            round_obj = ProcurementService.submit_group_request(
+                db=db,
+                business_id=business_id,
+                round_id=round_obj.id,
+                actor=f"approved_by:{user_id}"
+            )
+            execution_result = {"round_id": round_obj.id, "round_status": round_obj.status}
+
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Approval action '{action}' cannot be executed"
+            )
 
         approval.status = "approved"
         approval.decided_via = decided_via

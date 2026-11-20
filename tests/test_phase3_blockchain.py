@@ -24,6 +24,19 @@ def test_authentic_abi_validation():
     with pytest.raises(ValueError, match="Missing required events"):
         ContractABIManager.validate_abi(tampered_events)
 
+    wrong_signature = [
+        {
+            **item,
+            "inputs": [
+                {**arg, "type": "address"} if arg.get("name") == "amountZar" else arg
+                for arg in item.get("inputs", [])
+            ]
+        } if item.get("name") == "recordSale" else item
+        for item in abi
+    ]
+    with pytest.raises(ValueError, match="unexpected input signature"):
+        ContractABIManager.validate_abi(wrong_signature)
+
 
 def test_network_verification_and_wrong_chain_rejection():
     bp = BlockchainProvider(rpc_url="https://api.avax-test.network/ext/bc/C/rpc", chain_id=43113)
@@ -45,6 +58,7 @@ def test_blockchain_network_and_contract_endpoints(client):
     assert r_net.status_code == 200
     net_data = r_net.json()
     assert net_data["expected_chain_id"] == 43113
+    assert net_data["rpc_url"] == "[redacted]"
     assert net_data["contract_address"] == "0xE019a407a590C4348ea24c92Dc5Ac6C642e22f91"
 
     r_contract = client.get("/api/blockchain/contract")
@@ -123,3 +137,37 @@ def test_verify_transaction_wrong_contract_rejection(client):
     }, headers=headers)
     assert r_verify.status_code == 400
     assert "does not match UbuntuBiz contract" in r_verify.json()["detail"]
+
+
+def test_blockchain_records_are_scoped_to_the_authenticated_business(client):
+    token_a, business_a = register_spaza_shop(client, "Chain Shop A", "+27821000019")
+    token_b, _ = register_spaza_shop(client, "Chain Shop B", "+27821000020")
+    tx_hash = "0x" + "d" * 64
+
+    from tests.conftest import TestingSessionLocal
+    db = TestingSessionLocal()
+    try:
+        db.add(BlockchainTransaction(
+            transaction_hash=tx_hash,
+            transaction_status="confirmed",
+            contract_address="0x" + "1" * 40,
+            related_business_id=business_a,
+            value_wei="0"
+        ))
+        db.add(BlockchainEvent(
+            event_name="SaleRecorded",
+            event_id="sale-private-a",
+            transaction_hash=tx_hash,
+            block_number=1,
+            contract_address="0x" + "1" * 40,
+            payload_json={},
+            related_business_id=business_a
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+    assert client.get("/api/blockchain/transactions", headers=headers_b).json() == []
+    assert client.get(f"/api/blockchain/transactions/{tx_hash}", headers=headers_b).status_code == 404
+    assert client.get("/api/blockchain/sales", headers=headers_b).json() == []

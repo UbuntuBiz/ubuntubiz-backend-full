@@ -21,6 +21,7 @@ from app.core.security import (
     decode_token,
 )
 from app.api.deps import get_current_user_and_tenant
+from app.core.tenant import set_session_tenant
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -70,6 +71,7 @@ def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     )
     db.add(new_user)
     db.flush()
+    set_session_tenant(db, new_biz.id)
 
     # Create initial audit log
     audit = AuditLog(
@@ -85,11 +87,13 @@ def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     access_token = create_access_token(
         subject=new_user.id,
         business_id=new_biz.id,
-        role=new_user.role
+        role=new_user.role,
+        token_version=new_user.token_version
     )
     refresh_token = create_refresh_token(
         subject=new_user.id,
-        business_id=new_biz.id
+        business_id=new_biz.id,
+        token_version=new_user.token_version
     )
 
     return TokenResponse(
@@ -124,11 +128,13 @@ def login(req: UserLoginRequest, db: Session = Depends(get_db)):
     access_token = create_access_token(
         subject=user.id,
         business_id=user.business_id,
-        role=user.role
+        role=user.role,
+        token_version=user.token_version
     )
     refresh_token = create_refresh_token(
         subject=user.id,
-        business_id=user.business_id
+        business_id=user.business_id,
+        token_version=user.token_version
     )
 
     return TokenResponse(
@@ -163,11 +169,13 @@ def login_with_pin(req: PinLoginRequest, db: Session = Depends(get_db)):
     access_token = create_access_token(
         subject=user.id,
         business_id=user.business_id,
-        role=user.role
+        role=user.role,
+        token_version=user.token_version
     )
     refresh_token = create_refresh_token(
         subject=user.id,
-        business_id=user.business_id
+        business_id=user.business_id,
+        token_version=user.token_version
     )
 
     return TokenResponse(
@@ -203,7 +211,7 @@ def refresh_token(req: RefreshTokenRequest, db: Session = Depends(get_db)):
     business_id = payload.get("business_id")
 
     user = db.query(User).filter(User.id == user_id, User.business_id == business_id).first()
-    if not user:
+    if not user or payload.get("token_version", 0) != user.token_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     
     business = db.query(Business).filter(Business.id == business_id).first()
@@ -213,11 +221,13 @@ def refresh_token(req: RefreshTokenRequest, db: Session = Depends(get_db)):
     new_access_token = create_access_token(
         subject=user.id,
         business_id=user.business_id,
-        role=user.role
+        role=user.role,
+        token_version=user.token_version
     )
     new_refresh_token = create_refresh_token(
         subject=user.id,
-        business_id=user.business_id
+        business_id=user.business_id,
+        token_version=user.token_version
     )
 
     return TokenResponse(
@@ -231,10 +241,15 @@ def refresh_token(req: RefreshTokenRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
-def logout(current_user: User = Depends(get_current_user_and_tenant)):
+def logout(
+    current_user: User = Depends(get_current_user_and_tenant),
+    db: Session = Depends(get_db)
+):
     """
     Log out the current user and invalidate session context.
     """
+    current_user.token_version += 1
+    db.commit()
     return {"message": "Logged out successfully"}
 
 

@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone, date
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException, status
 from app.database.models import (
     Sale,
@@ -37,10 +38,12 @@ class SalesService:
         resolved_trace_id = trace_id or str(uuid.uuid4())
 
         # Check idempotency on the primary sale level
-        existing_event = db.query(Sale).filter(
+        existing_sale = db.query(Sale).filter(
             Sale.business_id == business_id,
-            Sale.id == idempotency_key  # Or traced via audit
+            Sale.idempotency_key == idempotency_key
         ).first()
+        if existing_sale:
+            return existing_sale
 
         total_cents = 0
         sale_items_to_create = []
@@ -75,6 +78,7 @@ class SalesService:
             sale_items_to_create.append({
                 "product_id": product.id,
                 "qty": qty,
+                "unit_cost": product.cost_price,
                 "unit_price": unit_price,
                 "product_name": product.name,
                 "idx": idx
@@ -82,34 +86,46 @@ class SalesService:
 
         # Create Sale
         sale = Sale(
+            id=str(uuid.uuid4()),
             business_id=business_id,
             total=total_cents,
             payment_type=payment_type,
+            idempotency_key=idempotency_key,
             created_at=datetime.now(timezone.utc)
         )
         db.add(sale)
-        db.flush()
 
         # Deduct stock and record sale items
         for entry in sale_items_to_create:
             item_idempotency_key = f"{idempotency_key}_sale_{entry['idx']}_{entry['product_id']}"
-            InventoryService.apply_inventory_event(
-                db=db,
-                business_id=business_id,
-                product_id=entry["product_id"],
-                event_type="sale",
-                qty_delta=-entry["qty"],  # Decrease stock
-                reason=f"Sale #{sale.id} ({entry['qty']} x {entry['product_name']})",
-                idempotency_key=item_idempotency_key,
-                actor=actor,
-                trace_id=resolved_trace_id,
-                unit_price=entry["unit_price"]
-            )
+            try:
+                InventoryService.apply_inventory_event(
+                    db=db,
+                    business_id=business_id,
+                    product_id=entry["product_id"],
+                    event_type="sale",
+                    qty_delta=-entry["qty"],  # Decrease stock
+                    reason=f"Sale #{sale.id} ({entry['qty']} x {entry['product_name']})",
+                    idempotency_key=item_idempotency_key,
+                    actor=actor,
+                    trace_id=resolved_trace_id,
+                    unit_price=entry["unit_price"]
+                )
+            except HTTPException:
+                db.rollback()
+                existing_sale = db.query(Sale).filter(
+                    Sale.business_id == business_id,
+                    Sale.idempotency_key == idempotency_key
+                ).first()
+                if existing_sale:
+                    return existing_sale
+                raise
 
             sale_item = SaleItem(
                 sale_id=sale.id,
                 product_id=entry["product_id"],
                 qty=entry["qty"],
+                unit_cost=entry["unit_cost"],
                 unit_price=entry["unit_price"]
             )
             db.add(sale_item)
@@ -122,7 +138,17 @@ class SalesService:
             purpose=f"Recorded sale #{sale.id} total R{total_cents / 100:.2f} ({payment_type})"
         )
         db.add(audit)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing_sale = db.query(Sale).filter(
+                Sale.business_id == business_id,
+                Sale.idempotency_key == idempotency_key
+            ).first()
+            if existing_sale:
+                return existing_sale
+            raise
         db.refresh(sale)
         return sale
 

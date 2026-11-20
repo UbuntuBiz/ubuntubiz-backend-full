@@ -93,7 +93,9 @@ def list_transactions(
     """
     List verified blockchain transactions.
     """
-    txs = db.query(BlockchainTransaction).order_by(
+    txs = db.query(BlockchainTransaction).filter(
+        BlockchainTransaction.related_business_id == current_user.business_id
+    ).order_by(
         BlockchainTransaction.created_at.desc()
     ).offset(offset).limit(limit).all()
     return txs
@@ -110,7 +112,8 @@ def get_transaction(
         clean_hash = f"0x{clean_hash}"
 
     tx = db.query(BlockchainTransaction).filter(
-        BlockchainTransaction.transaction_hash == clean_hash
+        BlockchainTransaction.transaction_hash == clean_hash,
+        BlockchainTransaction.related_business_id == current_user.business_id
     ).first()
     if not tx:
         raise HTTPException(
@@ -131,7 +134,8 @@ def get_blockchain_sales(
     Retrieve on-chain 'SaleRecorded' events synchronized from Avalanche Fuji.
     """
     events = db.query(BlockchainEvent).filter(
-        BlockchainEvent.event_name == "SaleRecorded"
+        BlockchainEvent.event_name == "SaleRecorded",
+        BlockchainEvent.related_business_id == current_user.business_id
     ).order_by(BlockchainEvent.created_at.desc()).offset(offset).limit(limit).all()
     return events
 
@@ -147,7 +151,8 @@ def get_blockchain_pools(
     Retrieve on-chain 'PoolCreated' and 'PoolJoined' events.
     """
     events = db.query(BlockchainEvent).filter(
-        BlockchainEvent.event_name.in_(["PoolCreated", "PoolJoined"])
+        BlockchainEvent.event_name.in_(["PoolCreated", "PoolJoined"]),
+        BlockchainEvent.related_business_id == current_user.business_id
     ).order_by(BlockchainEvent.created_at.desc()).offset(offset).limit(limit).all()
     return events
 
@@ -163,6 +168,7 @@ def get_blockchain_orders(
     Retrieve on-chain 'OrderCreated' and 'OrderApproved' events.
     """
     events = db.query(BlockchainEvent).filter(
-        BlockchainEvent.event_name.in_(["OrderCreated", "OrderApproved"])
+        BlockchainEvent.event_name.in_(["OrderCreated", "OrderApproved"]),
+        BlockchainEvent.related_business_id == current_user.business_id
     ).order_by(BlockchainEvent.created_at.desc()).offset(offset).limit(limit).all()
     return events

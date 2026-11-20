@@ -104,7 +104,9 @@ class BlockchainSynchroniser:
                         db.add(ev)
                         total_synced += 1
             except Exception as e:
-                logger.warning(f"Error fetching logs for {name}: {e}")
+                logger.warning(
+                    f"Error fetching {name} logs ({type(e).__name__})"
+                )
 
         checkpoint.last_synced_block = current_head
         checkpoint.updated_at = datetime.now(timezone.utc)

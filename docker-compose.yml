@@ -1,11 +1,23 @@
 # Docker Compose for UbuntuBiz Backend
 
+x-app-environment: &app-environment
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the PostgreSQL app-role connection string}
+  SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY to a randomly generated value}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  DEBUG: ${DEBUG:-false}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  REDIS_URL: redis://redis:6379/0
+  AVAX_FUJI_RPC_URL: ${AVAX_FUJI_RPC_URL:-https://api.avax-test.network/ext/bc/C/rpc}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+  WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+
 services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-ubuntu}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ubuntu}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-ubuntubiz}
     ports:
       - "5432:5432"
@@ -16,6 +28,7 @@ services:
       retries: 5
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-demote-app-role.sh:ro
 
   redis:
     image: redis:7-alpine
@@ -27,24 +40,48 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  migrate:
     build: .
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    environment:
-      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-ubuntu}:${POSTGRES_PASSWORD:-ubuntu}@postgres:5432/${POSTGRES_DB:-ubuntubiz}
-      - REDIS_URL=redis://redis:6379/0
-      - AVAX_RPC_URL=${AVAX_RPC_URL:-https://api.avax-test.network/ext/bc/C/rpc}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-supersecret}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-    ports:
-      - "8000:8000"
+    command: python -m alembic upgrade head
+    environment: *app-environment
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  backend:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment: *app-environment
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    volumes:
-      - .:/app
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: celery -A app.core.celery_config.celery_app worker --loglevel=INFO
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:
+    build: .
+    command: celery -A app.core.celery_config.celery_app beat --loglevel=INFO
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

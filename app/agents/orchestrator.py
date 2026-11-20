@@ -122,12 +122,14 @@ class OrchestratorAgent(BaseAgent):
                 "result": res
             }
         except Exception as e:
-            error_data = {"error": str(e)}
+            error_data = {"error": type(e).__name__}
             cls.record_task_finish(db=db, task=parent_task, result_data=error_data, status="failed")
-            logger.error(f"Error executing agent task {parent_task.id}: {e}", exc_info=True)
+            logger.error(
+                f"Agent task {parent_task.id} failed ({type(e).__name__})"
+            )
             return {
                 "task_id": parent_task.id,
                 "intent": intent,
-                "error": str(e),
+                "error": type(e).__name__,
                 "response": "An error occurred while processing your request. Please try again."
             }

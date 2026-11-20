@@ -1,8 +1,9 @@
 from typing import List, Optional
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database.connection import get_db
-from app.database.models import AgentTask, AgentToolCall, User
+from app.database.models import AgentTask, AgentToolCall, Message, User
 from app.schemas.ai import (
     AIChatRequest,
     AIChatResponse,
@@ -35,13 +36,42 @@ def chat_with_agents(
 
     task_id = execution["task_id"]
     intent = execution["intent"]
+    if execution.get("error"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=execution.get("response") or "Agent request failed"
+        )
     result = execution.get("result", {})
 
     reply_text = (
         result.get("response") or
-        result.get("confirmation_message") or
-        f"Processed request under intent '{intent}'."
+        result.get("confirmation_message")
     )
+    if not reply_text:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Agent request did not produce a response"
+        )
+
+    db.add_all([
+        Message(
+            business_id=current_user.business_id,
+            channel="web_chat",
+            external_msg_id=str(uuid.uuid4()),
+            direction="inbound",
+            type="text",
+            content=req.message
+        ),
+        Message(
+            business_id=current_user.business_id,
+            channel="web_chat",
+            external_msg_id=str(uuid.uuid4()),
+            direction="outbound",
+            type="text",
+            content=reply_text
+        )
+    ])
+    db.commit()
 
     return AIChatResponse(
         task_id=task_id,

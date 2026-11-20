@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
+import re
 from web3 import Web3
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -28,21 +29,30 @@ class TransactionVerifier:
         business_id: Optional[str] = None,
         actor: str = "system"
     ) -> Dict[str, Any]:
+        clean_hash = tx_hash.strip()
+        if not re.fullmatch(r"(?:0x)?[0-9a-fA-F]{64}", clean_hash):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Transaction hash must be a 32-byte hexadecimal value"
+            )
+        if not clean_hash.startswith("0x"):
+            clean_hash = f"0x{clean_hash}"
+
         w3 = provider.w3
         contract = provider.get_contract()
 
         # Enforce Fuji Chain ID 43113
         provider.verify_network()
 
-        # Format hash
-        clean_hash = tx_hash.strip()
-        if not clean_hash.startswith("0x"):
-            clean_hash = f"0x{clean_hash}"
-
         # Check if already processed in database
         existing_tx = db.query(BlockchainTransaction).filter(
             BlockchainTransaction.transaction_hash == clean_hash
         ).first()
+        if existing_tx and business_id and existing_tx.related_business_id != business_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Transaction not found for this business"
+            )
         if existing_tx and existing_tx.transaction_status == "confirmed":
             return {
                 "transaction_hash": existing_tx.transaction_hash,
@@ -59,7 +69,9 @@ class TransactionVerifier:
             tx = w3.eth.get_transaction(clean_hash)
             receipt = w3.eth.get_transaction_receipt(clean_hash)
         except Exception as e:
-            logger.warning(f"Could not retrieve transaction {clean_hash} from Fuji: {e}")
+            logger.warning(
+                f"Could not retrieve transaction from Fuji ({type(e).__name__})"
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Transaction '{clean_hash}' not found or still pending on Avalanche Fuji"
@@ -93,7 +105,9 @@ class TransactionVerifier:
             function_name = func_obj.fn_name
             decoded_args = {k: str(v) if isinstance(v, (int, bytes)) else v for k, v in func_args.items()}
         except Exception as e:
-            logger.warning(f"Could not decode function input for {clean_hash}: {e}")
+            logger.warning(
+                f"Could not decode transaction input ({type(e).__name__})"
+            )
 
         # Decode Logs/Events
         decoded_events = []
@@ -136,7 +150,14 @@ class TransactionVerifier:
             )
             db.add(audit)
 
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Transaction has already been associated with another record"
+            ) from exc
 
         return {
             "transaction_hash": clean_hash,
@@ -186,7 +207,7 @@ class TransactionVerifier:
                         "log_index": entry.get("logIndex", 0)
                     })
             except Exception as e:
-                logger.debug(f"Error parsing event: {e}")
+                logger.debug(f"Error parsing blockchain event ({type(e).__name__})")
 
         return decoded_events
 
@@ -218,10 +239,10 @@ class TransactionVerifier:
             payload_json=event_dict["args"],
             related_business_id=business_id
         )
-        db.add(new_event)
         try:
-            db.flush()
+            with db.begin_nested():
+                db.add(new_event)
+                db.flush()
         except IntegrityError:
-            db.rollback()
             return None
         return new_event

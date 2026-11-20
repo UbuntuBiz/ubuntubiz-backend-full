@@ -6,6 +6,7 @@ from app.database.models import Approval, User
 from app.schemas.ai import ApprovalResponse, ApprovalDecisionRequest
 from app.services.approval_service import ApprovalService
 from app.api.deps import get_current_user_and_tenant
+from app.core.permissions import Role
 
 router = APIRouter(prefix="/approvals", tags=["Human-in-the-Loop Approvals"])
 
@@ -50,6 +51,12 @@ def decide_approval(
     """
     Approve or reject a pending agent action. If approved, executes underlying business transaction.
     """
+    if current_user.role != Role.OWNER.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a business owner may decide approvals"
+        )
+
     return ApprovalService.decide_approval(
         db=db,
         business_id=current_user.business_id,

@@ -42,8 +42,10 @@ class BlockchainProvider:
         try:
             current_chain_id = self.w3.eth.chain_id
         except Exception as e:
-            logger.error(f"Failed to query chain ID from Avalanche Fuji RPC ({self.rpc_url}): {e}")
-            raise ConnectionError(f"Cannot reach Avalanche Fuji RPC at {self.rpc_url}: {e}")
+            logger.error(
+                f"Failed to query Avalanche Fuji chain ID ({type(e).__name__})"
+            )
+            raise ConnectionError("Cannot reach the configured Avalanche Fuji RPC") from e
 
         if current_chain_id != self.expected_chain_id:
             msg = (
@@ -77,11 +79,13 @@ class BlockchainProvider:
                 chain_id = self.w3.eth.chain_id
                 block_number = self.w3.eth.block_number
             except Exception as e:
-                logger.warning(f"Error fetching network details: {e}")
+                logger.warning(
+                    f"Error fetching blockchain network details ({type(e).__name__})"
+                )
 
         return {
             "network": "Avalanche Fuji C-Chain",
-            "rpc_url": self.rpc_url,
+            "rpc_url": "[redacted]",
             "expected_chain_id": self.expected_chain_id,
             "connected_chain_id": chain_id,
             "is_connected": connected,

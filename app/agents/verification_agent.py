@@ -42,7 +42,7 @@ class VerificationAgent(BaseAgent):
             return {
                 "verified": False,
                 "transaction_hash": tx_hash,
-                "reason": f"Verification failed: {e}",
+                "reason": f"Verification failed ({type(e).__name__}).",
                 "evidence": None
             }
 

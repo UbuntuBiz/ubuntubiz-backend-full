@@ -68,7 +68,6 @@ class SupplierCreate(BaseModel):
     contact_phone: str = Field(..., min_length=10, max_length=15)
     area: str = Field(..., min_length=2, max_length=255)
     catalog_summary: Optional[str] = None
-    is_verified: bool = False
 
 
 class SupplierResponse(BaseModel):
