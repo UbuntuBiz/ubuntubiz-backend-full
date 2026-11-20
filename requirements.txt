@@ -1,0 +1,16 @@
+alembic==1.20.1
+celery==5.7.0
+fastapi==0.165.0
+hexbytes==2.0.0
+passlib[argon2]
+pydantic==2.14.4
+pydantic-settings==2.16.3
+PyJWT==2.15.1
+pytest==9.2.0
+SQLAlchemy==2.1.9
+web3==8.0.0
+uvicorn[standard]
+httpx
+python-multipart
+asyncpg
+bcrypt==4.0.1

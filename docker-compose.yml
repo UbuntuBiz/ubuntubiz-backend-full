@@ -1,0 +1,51 @@
+# Docker Compose for UbuntuBiz Backend
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ubuntu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ubuntu}
+      POSTGRES_DB: ${POSTGRES_DB:-ubuntubiz}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-ubuntu}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-ubuntu}:${POSTGRES_PASSWORD:-ubuntu}@postgres:5432/${POSTGRES_DB:-ubuntubiz}
+      - REDIS_URL=redis://redis:6379/0
+      - AVAX_RPC_URL=${AVAX_RPC_URL:-https://api.avax-test.network/ext/bc/C/rpc}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-supersecret}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
